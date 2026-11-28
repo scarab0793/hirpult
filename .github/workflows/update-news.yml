@@ -1,8 +1,8 @@
-name: Update Hírpult news (UK daytime)
+name: Update Hírpult news (UK daytime, Claude API articles)
 on:
   schedule:
-    # Hourly candidate ticks. The gate below turns them into four runs a day, at 06:00, 10:00,
-    # 13:00 and 16:00 UK time, so a delayed tick is not lost.
+    # Hourly candidate ticks. The gate below turns them into runs at fixed UK local times
+    # (weekdays 06-20 every second hour, weekends 06/09/12/15/18), so a delayed tick is not lost.
     - cron: '17 5-20 * * *'
   workflow_dispatch:
   push:
@@ -23,7 +23,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,8 +47,9 @@ jobs:
           local = now.astimezone(ZoneInfo("Europe/London"))
           should_run = True
           if os.environ["EVENT_NAME"] == "schedule":
-              # Four daily slots in UK local time. A delayed tick still runs its slot later.
-              slots = [local.replace(hour=h, minute=0, second=0, microsecond=0) for h in (6, 10, 13, 16)]
+              # Daily slots in UK local time. A delayed tick still runs its slot later.
+              hours = (6, 9, 12, 15, 18) if local.weekday() >= 5 else (6, 8, 10, 12, 14, 16, 18, 20)
+              slots = [local.replace(hour=h, minute=0, second=0, microsecond=0) for h in hours]
               passed = [slot for slot in slots if slot <= local]
               should_run = bool(passed)
               path = Path("data/news.json")
@@ -65,6 +66,14 @@ jobs:
       - name: Collect recent RSS headlines
         if: steps.schedule_gate.outputs.run == 'true'
         run: python scripts/fetch_news.py
+      - name: Write articles with the Claude API
+        if: steps.schedule_gate.outputs.run == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          HIRPULT_AI_MAX_ARTICLES: ${{ vars.HIRPULT_AI_MAX_ARTICLES || '15' }}
+          HIRPULT_AI_MAX_CALLS: ${{ vars.HIRPULT_AI_MAX_CALLS || '45' }}
+          HIRPULT_AI_MODEL: ${{ vars.HIRPULT_AI_MODEL }}
+        run: python scripts/enrich_news.py
       - name: Merge duplicate stories
         if: steps.schedule_gate.outputs.run == 'true'
         run: python scripts/dedupe_editorial.py
@@ -74,7 +83,7 @@ jobs:
           # A test run started from another branch commits to that branch only, never to the live main.
           BRANCH: ${{ github.ref_name }}
         run: |
-          git add data/news.json data/editorial.json data/news-history.json
+          git add data/news.json data/editorial.json data/news-history.json data/ai-state.json
           if git diff --cached --quiet; then exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

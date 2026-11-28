@@ -25,6 +25,8 @@ KEEP_DAYS = int(os.getenv("HIRPULT_KEEP_DAYS", "10"))
 MAX_TRIES = 3  # a story that fails the checks is retried in later runs; unreadable sources count as MAX_TRIES at once
 # A story counts as "Megerősített" with two different publishers or one official source.
 OFFICIAL_HOSTS = hp_dedupe.OFFICIAL_HOSTS
+# Articles written from these outlets go to the site's Tech tab (the page moves c == "Tech" there).
+TECH_SOURCES = {"Qubit", "HWSW", "PROHARDVER!", "Rakéta", "National Geographic", "Csillagászat", "Űrvilág"}
 STOP = set("hogy mint után miatt szerint magyar most több egyik másik ezzel azzal között".split())
 
 
@@ -150,7 +152,7 @@ def main():
     state = read(STATE, {"failed": {}})
     failed = state.setdefault("failed", {})
     done = {x["id"] for x in archive["items"]}
-    limit = max(0, min(12, int(os.getenv("HIRPULT_AI_MAX_ARTICLES", "6"))))
+    limit = max(0, min(25, int(os.getenv("HIRPULT_AI_MAX_ARTICLES", "6"))))
     max_calls = int(os.getenv("HIRPULT_AI_MAX_CALLS", "16"))
     count, stop = 0, False
 
@@ -235,14 +237,16 @@ def main():
             t=article["title"][:180],
             s=article["lead"][:500],
             p=article["paragraphs"],
-            c="Hírpult",
+            c="Tech" if group[0]["c"] in TECH_SOURCES else "Hírpult",
             st=status(group),
             cav=article["cav"] or ("Egyetlen forrás alapján készült összefoglaló, a részletek az eredeti cikkben ellenőrizhetők." if len(group) == 1 else ""),
             op=article["op"],
             ai_edited=True,
             src=[[x["c"], x["src"][0][1]] for x in group],
         )
-        if article["section"]:
+        if a.get("r") == "Megyei" and a.get("m"):
+            merged["r"], merged["m"] = "Megyei", a["m"]  # county stories keep their county, whatever section the model picked
+        elif article["section"]:
             merged["r"] = article["section"]
         if not merged.get("img"):
             donor = next((x for x in group if x.get("img")), None)
